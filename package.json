@@ -1,0 +1,41 @@
+{
+  "name": "agent-discord",
+  "version": "1.0.0",
+  "description": "An MCP server that allows any agent to interact through a bot on Discord",
+  "main": "dist/index.js",
+  "bin": {
+    "agent-discord": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "tsx src/index.test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anthony-maio/agent-discord.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/anthony-maio/agent-discord/issues"
+  },
+  "homepage": "https://github.com/anthony-maio/agent-discord#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "discord.js": "^14.25.1",
+    "dotenv": "^17.3.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "undici": "^6.24.1"
+  }
+}

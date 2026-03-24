@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables — never commit real tokens
+.env
+
+# Misc
+*.js.map
+*.d.ts.map
