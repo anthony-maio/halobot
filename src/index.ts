@@ -112,6 +112,17 @@ interface Conversation {
 /** Active thread-based conversations keyed by thread_id. */
 const conversations = new Map<string, Conversation>();
 
+const CONVERSATION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours (matches thread auto-archive)
+
+function pruneConversations(): void {
+  const now = Date.now();
+  for (const [id, conv] of conversations) {
+    if (now - new Date(conv.created_at).getTime() > CONVERSATION_MAX_AGE_MS) {
+      conversations.delete(id);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -156,6 +167,7 @@ async function resolveOrCreateThread(opts: {
   user_id: string;
   agent_name: string;
 }): Promise<{ thread: ThreadChannel; conv: Conversation }> {
+  pruneConversations();
   const { thread_id, channel_id, user_id, agent_name } = opts;
 
   if (thread_id) {
