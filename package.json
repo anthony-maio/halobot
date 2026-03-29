@@ -1,6 +1,6 @@
 {
   "name": "agent-discord",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "An MCP server that allows any agent to interact through a bot on Discord",
   "main": "dist/index.js",
   "bin": {

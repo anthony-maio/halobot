@@ -2,15 +2,22 @@
 /**
  * agent-discord: An MCP server that allows any MCP-capable agent to
  * communicate with Discord — send messages, read messages, list guilds and
- * channels, and wait for replies.  Perfect for giving tools like Claude Code
- * a persistent Discord-based command-and-control channel.
+ * channels, manage threaded conversations, and wait for replies.
+ *
+ * Provides both low-level Discord access AND a high-level, thread-based
+ * human-in-the-loop conversation model with user whitelisting.
  *
  * Required environment variables:
  *   DISCORD_BOT_TOKEN  – your Discord bot token
  *
  * Optional:
- *   DISCORD_GUILD_ID   – default guild (server) ID when not supplied per-call
- *   MESSAGE_CACHE_SIZE – number of incoming messages to buffer (default: 100)
+ *   DISCORD_GUILD_ID       – default guild (server) ID
+ *   DISCORD_CHANNEL_ID     – default channel for thread-based conversations
+ *   DISCORD_ALLOWED_USERS  – comma-separated user IDs for whitelisted access
+ *   MESSAGE_CACHE_SIZE     – incoming message buffer size (default: 100)
+ *   POLL_INTERVAL_MS       – reply poll interval in ms (default: 2000)
+ *   REPLY_TIMEOUT_SECONDS  – max wait for replies (default: 300)
+ *   MAX_MESSAGE_LENGTH     – chunk messages longer than this (default: 1900)
  */
 
 import "dotenv/config";
@@ -18,6 +25,7 @@ import {
   Client,
   GatewayIntentBits,
   TextChannel,
+  ThreadChannel,
   Collection,
   Message,
   ChannelType,
@@ -40,9 +48,27 @@ if (!DISCORD_BOT_TOKEN) {
 }
 
 const DEFAULT_GUILD_ID = process.env.DISCORD_GUILD_ID ?? "";
+const DEFAULT_CHANNEL_ID = process.env.DISCORD_CHANNEL_ID ?? "";
 const MESSAGE_CACHE_SIZE = parseInt(
   process.env.MESSAGE_CACHE_SIZE ?? "100",
   10
+);
+const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? "2000", 10);
+const DEFAULT_REPLY_TIMEOUT = parseInt(
+  process.env.REPLY_TIMEOUT_SECONDS ?? "300",
+  10
+);
+const MAX_MESSAGE_LENGTH = parseInt(
+  process.env.MAX_MESSAGE_LENGTH ?? "1900",
+  10
+);
+
+// Parse allowed users (empty = no whitelist enforcement on low-level tools)
+const ALLOWED_USERS: Set<string> = new Set(
+  (process.env.DISCORD_ALLOWED_USERS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
 );
 
 // ---------------------------------------------------------------------------
@@ -70,6 +96,22 @@ discordClient.on("messageCreate", (message) => {
 });
 
 // ---------------------------------------------------------------------------
+// Conversation tracking (thread-based)
+// ---------------------------------------------------------------------------
+
+interface Conversation {
+  thread_id: string;
+  channel_id: string;
+  user_id: string;
+  agent_name: string;
+  created_at: string;
+  last_agent_message_id: string | null;
+}
+
+/** Active thread-based conversations keyed by thread_id. */
+const conversations = new Map<string, Conversation>();
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -88,8 +130,14 @@ function serializeMessage(msg: Message) {
     },
     content: msg.content,
     timestamp: msg.createdAt.toISOString(),
-    attachments: [...msg.attachments.values()].map((a) => ({ url: a.url, name: a.name })),
-    embeds: msg.embeds.map((e) => ({ title: e.title, description: e.description })),
+    attachments: [...msg.attachments.values()].map((a) => ({
+      url: a.url,
+      name: a.name,
+    })),
+    embeds: msg.embeds.map((e) => ({
+      title: e.title,
+      description: e.description,
+    })),
   };
 }
 
@@ -111,8 +159,7 @@ function waitForReady(timeoutMs = 15_000): Promise<void> {
 }
 
 /**
- * Resolve a TextChannel by ID, throwing a descriptive error if not found
- * or not a text channel.
+ * Resolve a TextChannel by ID.
  */
 async function resolveTextChannel(channelId: string): Promise<TextChannel> {
   await waitForReady();
@@ -124,14 +171,72 @@ async function resolveTextChannel(channelId: string): Promise<TextChannel> {
   return channel;
 }
 
+/**
+ * Validate that a user ID is in the allowed list (for thread-based tools).
+ */
+function validateAllowedUser(userId: string): void {
+  if (ALLOWED_USERS.size === 0) return; // No whitelist configured
+  if (!ALLOWED_USERS.has(userId)) {
+    throw new Error(
+      `User ${userId} is not in DISCORD_ALLOWED_USERS. ` +
+        `Allowed: ${[...ALLOWED_USERS].join(", ")}`
+    );
+  }
+}
+
+/**
+ * Split a message into Discord-safe chunks, breaking at newlines when possible.
+ */
+function chunkMessage(content: string): string[] {
+  if (content.length <= MAX_MESSAGE_LENGTH) return [content];
+
+  const chunks: string[] = [];
+  let remaining = content;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= MAX_MESSAGE_LENGTH) {
+      chunks.push(remaining);
+      break;
+    }
+
+    // Try to break at the last newline within the limit
+    let cut = remaining.lastIndexOf("\n", MAX_MESSAGE_LENGTH);
+    if (cut === -1 || cut < MAX_MESSAGE_LENGTH / 2) {
+      // No good newline — hard cut
+      cut = MAX_MESSAGE_LENGTH;
+    }
+
+    chunks.push(remaining.slice(0, cut));
+    remaining = remaining.slice(cut).replace(/^\n/, "");
+  }
+
+  return chunks;
+}
+
+/**
+ * Get the default user ID (first allowed user, or throw).
+ */
+function getDefaultUserId(): string {
+  if (ALLOWED_USERS.size === 0) {
+    throw new Error(
+      "No user_id provided and DISCORD_ALLOWED_USERS is not configured."
+    );
+  }
+  return [...ALLOWED_USERS][0];
+}
+
 // ---------------------------------------------------------------------------
 // MCP Server
 // ---------------------------------------------------------------------------
 
 const server = new McpServer({
   name: "agent-discord",
-  version: "1.0.0",
+  version: "2.0.0",
 });
+
+// ===================================================================
+// LOW-LEVEL TOOLS (unchanged from v1 — general Discord access)
+// ===================================================================
 
 // ------------------------------------------------------------------
 // Tool: list_guilds
@@ -150,7 +255,7 @@ server.registerTool(
     const guilds = await discordClient.guilds.fetch();
     const result = guilds.map((g) => ({ id: g.id, name: g.name }));
     return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
     };
   }
 );
@@ -192,13 +297,13 @@ server.registerTool(
       .map((c) => ({ id: c!.id, name: c!.name, type: ChannelType[c!.type] }));
 
     return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
     };
   }
 );
 
 // ------------------------------------------------------------------
-// Tool: send_message
+// Tool: send_message (low-level, any channel)
 // ------------------------------------------------------------------
 server.registerTool(
   "send_message",
@@ -206,7 +311,8 @@ server.registerTool(
     title: "Send Discord Message",
     description:
       "Sends a text message to a specific Discord channel. " +
-      "Returns the ID of the sent message so it can be referenced later.",
+      "Returns the ID of the sent message. For thread-based conversations, " +
+      "use send_thread_message instead.",
     inputSchema: {
       channel_id: z.string().describe("The Discord channel ID to send to"),
       message: z.string().describe("The text content of the message"),
@@ -214,12 +320,20 @@ server.registerTool(
   },
   async ({ channel_id, message }) => {
     const channel = await resolveTextChannel(channel_id);
-    const sent = await channel.send(message);
+    const chunks = chunkMessage(message);
+    let lastSent: Message | null = null;
+    for (const chunk of chunks) {
+      lastSent = await channel.send(chunk);
+    }
     return {
       content: [
         {
-          type: "text",
-          text: JSON.stringify({ message_id: sent.id, timestamp: sent.createdAt.toISOString() }),
+          type: "text" as const,
+          text: JSON.stringify({
+            message_id: lastSent!.id,
+            timestamp: lastSent!.createdAt.toISOString(),
+            chunks_sent: chunks.length,
+          }),
         },
       ],
     };
@@ -248,7 +362,9 @@ server.registerTool(
         .max(100)
         .optional()
         .default(20)
-        .describe("Maximum number of messages to return (default: 20, max: 100)"),
+        .describe(
+          "Maximum number of messages to return (default: 20, max: 100)"
+        ),
     },
   },
   async ({ channel_id, limit }) => {
@@ -258,7 +374,7 @@ server.registerTool(
     msgs = msgs.slice(-max);
     const result = msgs.map(serializeMessage);
     return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
     };
   }
 );
@@ -306,18 +422,16 @@ server.registerTool(
       await channel.messages.fetch(fetchOptions);
 
     // Discord returns newest-first; reverse for chronological order
-    const result = [...messages.values()]
-      .reverse()
-      .map(serializeMessage);
+    const result = [...messages.values()].reverse().map(serializeMessage);
 
     return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
     };
   }
 );
 
 // ------------------------------------------------------------------
-// Tool: wait_for_message
+// Tool: wait_for_message (low-level, any channel)
 // ------------------------------------------------------------------
 server.registerTool(
   "wait_for_message",
@@ -325,8 +439,8 @@ server.registerTool(
     title: "Wait for Discord Message",
     description:
       "Polls until a new message arrives in the specified channel (optionally " +
-      "matching a keyword) or the timeout expires. Ideal for command-response " +
-      "flows such as waiting for a human to approve an action.",
+      "matching a keyword) or the timeout expires. For thread-based " +
+      "conversations, use wait_for_reply instead.",
     inputSchema: {
       channel_id: z.string().describe("The Discord channel ID to watch"),
       keyword: z
@@ -357,7 +471,6 @@ server.registerTool(
     const pollIntervalMs = 500;
 
     while (Date.now() < deadline) {
-      // Look in the live cache first
       const candidate = messageCache.find((m) => {
         if (m.channelId !== channel_id) return false;
         if (after_message_id && BigInt(m.id) <= BigInt(after_message_id))
@@ -370,7 +483,7 @@ server.registerTool(
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: JSON.stringify(serializeMessage(candidate), null, 2),
             },
           ],
@@ -383,11 +496,501 @@ server.registerTool(
     return {
       content: [
         {
-          type: "text",
+          type: "text" as const,
           text: JSON.stringify({
             timed_out: true,
             message: `No matching message received within ${timeout_seconds ?? 60}s`,
           }),
+        },
+      ],
+    };
+  }
+);
+
+// ===================================================================
+// HIGH-LEVEL TOOLS (v2 — thread-based human-in-the-loop)
+// ===================================================================
+
+// ------------------------------------------------------------------
+// Tool: send_thread_message
+// ------------------------------------------------------------------
+server.registerTool(
+  "send_thread_message",
+  {
+    title: "Send Thread Message",
+    description:
+      "Send a message to a whitelisted user via a Discord thread. " +
+      "Creates a new thread (and pings the user) or posts into an existing one. " +
+      "Returns the thread_id for follow-up calls. Long messages are " +
+      "automatically split across multiple Discord messages.",
+    inputSchema: {
+      content: z.string().describe("The message content to send"),
+      user_id: z
+        .string()
+        .optional()
+        .describe(
+          "Discord user ID of the recipient. Must be whitelisted. " +
+          "Defaults to the first user in DISCORD_ALLOWED_USERS."
+        ),
+      agent_name: z
+        .string()
+        .optional()
+        .default("Agent")
+        .describe("Display name for the agent in Discord"),
+      thread_id: z
+        .string()
+        .optional()
+        .describe(
+          "Thread ID of an existing conversation to continue. " +
+          "Omit to start a new conversation."
+        ),
+      channel_id: z
+        .string()
+        .optional()
+        .describe(
+          "Channel to create the thread in. Defaults to DISCORD_CHANNEL_ID."
+        ),
+    },
+  },
+  async ({ content, user_id, agent_name, thread_id, channel_id }) => {
+    await waitForReady();
+
+    const targetUser = user_id ?? getDefaultUserId();
+    validateAllowedUser(targetUser);
+    const agentLabel = agent_name ?? "Agent";
+    const targetChannel = channel_id ?? DEFAULT_CHANNEL_ID;
+
+    let thread: ThreadChannel;
+    let conv: Conversation;
+
+    if (thread_id && conversations.has(thread_id)) {
+      // Continue existing conversation
+      conv = conversations.get(thread_id)!;
+      const fetched = await discordClient.channels.fetch(thread_id);
+      if (!fetched || !fetched.isThread()) {
+        throw new Error(`Thread ${thread_id} not found or not a thread`);
+      }
+      thread = fetched as ThreadChannel;
+    } else if (thread_id) {
+      // thread_id provided but not tracked — try to fetch it anyway
+      const fetched = await discordClient.channels.fetch(thread_id);
+      if (!fetched || !fetched.isThread()) {
+        throw new Error(`Thread ${thread_id} not found or not a thread`);
+      }
+      thread = fetched as ThreadChannel;
+      conv = {
+        thread_id: thread.id,
+        channel_id: thread.parentId ?? targetChannel,
+        user_id: targetUser,
+        agent_name: agentLabel,
+        created_at: new Date().toISOString(),
+        last_agent_message_id: null,
+      };
+      conversations.set(thread.id, conv);
+    } else {
+      // New conversation — create root message + thread
+      if (!targetChannel) {
+        throw new Error(
+          "channel_id is required (or set DISCORD_CHANNEL_ID) to create a new thread."
+        );
+      }
+      const channel = await resolveTextChannel(targetChannel);
+      const rootMsg = await channel.send(
+        `🤖 **${agentLabel}** is requesting your attention, <@${targetUser}>.`
+      );
+      thread = await rootMsg.startThread({
+        name: `${agentLabel} — ${new Date().toLocaleString("en-US", {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        })}`,
+        autoArchiveDuration: 1440, // 24 hours
+      });
+      conv = {
+        thread_id: thread.id,
+        channel_id: targetChannel,
+        user_id: targetUser,
+        agent_name: agentLabel,
+        created_at: new Date().toISOString(),
+        last_agent_message_id: null,
+      };
+      conversations.set(thread.id, conv);
+    }
+
+    // Send content in chunks
+    const chunks = chunkMessage(content);
+    let lastSent: Message | null = null;
+    for (const chunk of chunks) {
+      lastSent = await thread.send(`**${agentLabel}:**\n${chunk}`);
+    }
+
+    conv.last_agent_message_id = lastSent?.id ?? null;
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(
+            {
+              status: "sent",
+              thread_id: conv.thread_id,
+              user_id: conv.user_id,
+              agent_name: conv.agent_name,
+              chunks_sent: chunks.length,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+);
+
+// ------------------------------------------------------------------
+// Tool: wait_for_reply
+// ------------------------------------------------------------------
+server.registerTool(
+  "wait_for_reply",
+  {
+    title: "Wait for Thread Reply",
+    description:
+      "Wait for the whitelisted user to reply in a conversation thread. " +
+      "Polls the thread until the user responds or timeout is reached. " +
+      "Returns the concatenated text of all new messages from the user.",
+    inputSchema: {
+      thread_id: z
+        .string()
+        .describe("The thread ID returned from send_thread_message"),
+      timeout_seconds: z
+        .number()
+        .int()
+        .min(1)
+        .max(600)
+        .optional()
+        .default(DEFAULT_REPLY_TIMEOUT)
+        .describe(
+          `Max seconds to wait (default: ${DEFAULT_REPLY_TIMEOUT}, max: 600)`
+        ),
+    },
+  },
+  async ({ thread_id, timeout_seconds }) => {
+    await waitForReady();
+
+    const conv = conversations.get(thread_id);
+    if (!conv) {
+      throw new Error(
+        `No tracked conversation for thread ${thread_id}. ` +
+        `Use send_thread_message first.`
+      );
+    }
+
+    const timeoutMs = (timeout_seconds ?? DEFAULT_REPLY_TIMEOUT) * 1000;
+    const deadline = Date.now() + timeoutMs;
+
+    const thread = await discordClient.channels.fetch(thread_id);
+    if (!thread || !thread.isThread()) {
+      throw new Error(`Thread ${thread_id} not found`);
+    }
+
+    while (Date.now() < deadline) {
+      // Fetch messages after the last agent message
+      const fetchOpts: Parameters<typeof thread.messages.fetch>[0] = {
+        limit: 100,
+      };
+      if (conv.last_agent_message_id) {
+        fetchOpts.after = conv.last_agent_message_id;
+      }
+
+      const messages = await thread.messages.fetch(fetchOpts);
+      const userMessages = messages
+        .filter((m) => m.author.id === conv.user_id && !m.author.bot)
+        .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+      if (userMessages.size > 0) {
+        const reply = userMessages.map((m) => m.content).join("\n");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  status: "replied",
+                  thread_id: conv.thread_id,
+                  reply,
+                  message_count: userMessages.size,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    }
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(
+            {
+              status: "timeout",
+              thread_id: conv.thread_id,
+              reply: null,
+              waited_seconds: timeout_seconds ?? DEFAULT_REPLY_TIMEOUT,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+);
+
+// ------------------------------------------------------------------
+// Tool: send_and_wait
+// ------------------------------------------------------------------
+server.registerTool(
+  "send_and_wait",
+  {
+    title: "Send Message and Wait for Reply",
+    description:
+      "Convenience tool: send a message to a user via a thread and wait " +
+      "for their reply in one call. Best for simple question/answer exchanges. " +
+      "Combines send_thread_message + wait_for_reply.",
+    inputSchema: {
+      content: z.string().describe("The message to send"),
+      user_id: z
+        .string()
+        .optional()
+        .describe("Discord user ID. Defaults to first allowed user."),
+      agent_name: z
+        .string()
+        .optional()
+        .default("Agent")
+        .describe("Agent display name"),
+      thread_id: z
+        .string()
+        .optional()
+        .describe("Existing thread to continue, or omit for new"),
+      channel_id: z
+        .string()
+        .optional()
+        .describe("Channel for new threads. Defaults to DISCORD_CHANNEL_ID."),
+      timeout_seconds: z
+        .number()
+        .int()
+        .min(1)
+        .max(600)
+        .optional()
+        .default(DEFAULT_REPLY_TIMEOUT)
+        .describe("Max seconds to wait for reply"),
+    },
+  },
+  async ({
+    content,
+    user_id,
+    agent_name,
+    thread_id,
+    channel_id,
+    timeout_seconds,
+  }) => {
+    await waitForReady();
+
+    const targetUser = user_id ?? getDefaultUserId();
+    validateAllowedUser(targetUser);
+    const agentLabel = agent_name ?? "Agent";
+    const targetChannel = channel_id ?? DEFAULT_CHANNEL_ID;
+
+    // --- Send ---
+    let thread: ThreadChannel;
+    let conv: Conversation;
+
+    if (thread_id && conversations.has(thread_id)) {
+      conv = conversations.get(thread_id)!;
+      const fetched = await discordClient.channels.fetch(thread_id);
+      if (!fetched || !fetched.isThread()) {
+        throw new Error(`Thread ${thread_id} not found`);
+      }
+      thread = fetched as ThreadChannel;
+    } else {
+      if (!targetChannel) {
+        throw new Error("channel_id or DISCORD_CHANNEL_ID required for new threads");
+      }
+      const channel = await resolveTextChannel(targetChannel);
+      const rootMsg = await channel.send(
+        `🤖 **${agentLabel}** is requesting your attention, <@${targetUser}>.`
+      );
+      thread = await rootMsg.startThread({
+        name: `${agentLabel} — ${new Date().toLocaleString("en-US", {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        })}`,
+        autoArchiveDuration: 1440,
+      });
+      conv = {
+        thread_id: thread.id,
+        channel_id: targetChannel,
+        user_id: targetUser,
+        agent_name: agentLabel,
+        created_at: new Date().toISOString(),
+        last_agent_message_id: null,
+      };
+      conversations.set(thread.id, conv);
+    }
+
+    const chunks = chunkMessage(content);
+    let lastSent: Message | null = null;
+    for (const chunk of chunks) {
+      lastSent = await thread.send(`**${agentLabel}:**\n${chunk}`);
+    }
+    conv.last_agent_message_id = lastSent?.id ?? null;
+
+    // --- Wait ---
+    const timeoutMs = (timeout_seconds ?? DEFAULT_REPLY_TIMEOUT) * 1000;
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const fetchOpts: Parameters<typeof thread.messages.fetch>[0] = {
+        limit: 100,
+      };
+      if (conv.last_agent_message_id) {
+        fetchOpts.after = conv.last_agent_message_id;
+      }
+
+      const messages = await thread.messages.fetch(fetchOpts);
+      const userMessages = messages
+        .filter((m) => m.author.id === conv.user_id && !m.author.bot)
+        .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+      if (userMessages.size > 0) {
+        const reply = userMessages.map((m) => m.content).join("\n");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  status: "replied",
+                  thread_id: conv.thread_id,
+                  reply,
+                  message_count: userMessages.size,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    }
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(
+            {
+              status: "timeout",
+              thread_id: conv.thread_id,
+              reply: null,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+);
+
+// ------------------------------------------------------------------
+// Tool: list_conversations
+// ------------------------------------------------------------------
+server.registerTool(
+  "list_conversations",
+  {
+    title: "List Active Conversations",
+    description:
+      "List all active thread-based conversations managed by this server. " +
+      "Returns thread IDs, agent names, user IDs, and creation time.",
+    inputSchema: {},
+  },
+  async () => {
+    const result = [...conversations.values()].map((conv) => ({
+      thread_id: conv.thread_id,
+      user_id: conv.user_id,
+      agent_name: conv.agent_name,
+      created_at: conv.created_at,
+      channel_id: conv.channel_id,
+    }));
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({ conversations: result }, null, 2),
+        },
+      ],
+    };
+  }
+);
+
+// ------------------------------------------------------------------
+// Tool: get_thread_messages
+// ------------------------------------------------------------------
+server.registerTool(
+  "get_thread_messages",
+  {
+    title: "Get Thread Messages",
+    description:
+      "Retrieve the full message history of a conversation thread. " +
+      "Useful for reviewing context before continuing a conversation.",
+    inputSchema: {
+      thread_id: z.string().describe("The thread ID to fetch messages from"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .default(50)
+        .describe("Max messages to return (default: 50)"),
+    },
+  },
+  async ({ thread_id, limit }) => {
+    await waitForReady();
+
+    const thread = await discordClient.channels.fetch(thread_id);
+    if (!thread || !thread.isThread()) {
+      throw new Error(`Thread ${thread_id} not found or not a thread`);
+    }
+
+    const messages = await thread.messages.fetch({ limit: limit ?? 50 });
+    const result = [...messages.values()]
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+      .map((msg) => ({
+        author: msg.author.displayName ?? msg.author.username,
+        author_id: msg.author.id,
+        content: msg.content,
+        timestamp: msg.createdAt.toISOString(),
+        is_bot: msg.author.bot,
+      }));
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({ messages: result }, null, 2),
         },
       ],
     };
@@ -399,8 +1002,6 @@ server.registerTool(
 // ---------------------------------------------------------------------------
 
 async function main() {
-  // Start Discord login in the background – MCP transport is available
-  // immediately; tools will wait for the client to be ready before acting.
   discordClient.login(DISCORD_BOT_TOKEN).catch((err: unknown) => {
     process.stderr.write(`Discord login failed: ${String(err)}\n`);
     process.exit(1);
@@ -408,6 +1009,15 @@ async function main() {
 
   discordClient.once("ready", (client) => {
     process.stderr.write(`Discord bot ready: ${client.user.tag}\n`);
+    if (ALLOWED_USERS.size > 0) {
+      process.stderr.write(
+        `Whitelisted users: ${[...ALLOWED_USERS].join(", ")}\n`
+      );
+    } else {
+      process.stderr.write(
+        `WARNING: No DISCORD_ALLOWED_USERS configured. Thread tools will require explicit user_id.\n`
+      );
+    }
   });
 
   const transport = new StdioServerTransport();

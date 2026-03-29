@@ -3,7 +3,8 @@
  *
  * These tests do NOT require a live Discord connection or real bot token.
  * They exercise the pure-logic helpers (message serialisation, cache
- * filtering) by importing only the parts that have no side-effects.
+ * filtering, chunking, whitelist validation) by importing only the parts
+ * that have no side-effects.
  */
 
 import { strict as assert } from "assert";
@@ -70,8 +71,53 @@ function readMessages(
 ) {
   const max = opts.limit ?? 20;
   let msgs = [...cache];
-  if (opts.channel_id) msgs = msgs.filter((m) => m.channelId === opts.channel_id);
+  if (opts.channel_id)
+    msgs = msgs.filter((m) => m.channelId === opts.channel_id);
   return msgs.slice(-max).map(serializeMessage);
+}
+
+// ---------------------------------------------------------------------------
+// Inline copy of chunkMessage
+// ---------------------------------------------------------------------------
+
+function chunkMessage(content: string, maxLen: number = 1900): string[] {
+  if (content.length <= maxLen) return [content];
+
+  const chunks: string[] = [];
+  let remaining = content;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) {
+      chunks.push(remaining);
+      break;
+    }
+
+    let cut = remaining.lastIndexOf("\n", maxLen);
+    if (cut === -1 || cut < maxLen / 2) {
+      cut = maxLen;
+    }
+
+    chunks.push(remaining.slice(0, cut));
+    remaining = remaining.slice(cut).replace(/^\n/, "");
+  }
+
+  return chunks;
+}
+
+// ---------------------------------------------------------------------------
+// Inline copy of whitelist validation
+// ---------------------------------------------------------------------------
+
+function validateAllowedUser(
+  userId: string,
+  allowedUsers: Set<string>
+): void {
+  if (allowedUsers.size === 0) return;
+  if (!allowedUsers.has(userId)) {
+    throw new Error(
+      `User ${userId} is not in DISCORD_ALLOWED_USERS. Allowed: ${[...allowedUsers].join(", ")}`
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +179,10 @@ test("handles null guildId", () => {
 
 test("serialises attachments", () => {
   const msg = makeMessage();
-  msg.attachments.set("a1", { url: "https://example.com/file.png", name: "file.png" });
+  msg.attachments.set("a1", {
+    url: "https://example.com/file.png",
+    name: "file.png",
+  });
   const s = serializeMessage(msg);
   assert.equal(s.attachments.length, 1);
   assert.equal(s.attachments[0].url, "https://example.com/file.png");
@@ -178,7 +227,6 @@ test("filters by channel_id", () => {
 test("respects limit", () => {
   const result = readMessages(cache, { limit: 2 });
   assert.equal(result.length, 2);
-  // slice(-2) returns the last 2
   assert.equal(result[0].id, "3");
   assert.equal(result[1].id, "4");
 });
@@ -215,7 +263,11 @@ function matchesWaitCriteria(
 
 const waitCache: StubMessage[] = [
   makeMessage({ id: "100", channelId: "ch-x", content: "start here" }),
-  makeMessage({ id: "200", channelId: "ch-x", content: "approve deployment" }),
+  makeMessage({
+    id: "200",
+    channelId: "ch-x",
+    content: "approve deployment",
+  }),
   makeMessage({ id: "300", channelId: "ch-y", content: "other channel" }),
 ];
 
@@ -269,6 +321,69 @@ test("keyword and after_message_id can be combined", () => {
       keyword: "approve",
     })
   );
+});
+
+// --- chunkMessage ---
+
+console.log("\nchunkMessage");
+
+test("short message returns single chunk", () => {
+  const chunks = chunkMessage("Hello", 1900);
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0], "Hello");
+});
+
+test("long message chunks at newlines", () => {
+  const msg = "Line one\nLine two\nLine three\nLine four\nLine five is a bit longer";
+  const chunks = chunkMessage(msg, 30);
+  assert.ok(chunks.length > 1);
+  assert.ok(chunks.every((c) => c.length <= 30));
+  // All content should be preserved
+  const reassembled = chunks.join("\n");
+  assert.ok(reassembled.includes("Line one"));
+  assert.ok(reassembled.includes("Line five"));
+});
+
+test("hard cuts when no newlines available", () => {
+  const msg = "abcdefghijklmnopqrstuvwxyz";
+  const chunks = chunkMessage(msg, 10);
+  assert.ok(chunks.every((c) => c.length <= 10));
+  assert.equal(chunks.join(""), msg);
+});
+
+test("empty string returns single chunk", () => {
+  const chunks = chunkMessage("", 1900);
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0], "");
+});
+
+test("exactly max length returns single chunk", () => {
+  const msg = "a".repeat(50);
+  const chunks = chunkMessage(msg, 50);
+  assert.equal(chunks.length, 1);
+});
+
+// --- validateAllowedUser ---
+
+console.log("\nvalidateAllowedUser (whitelist)");
+
+test("passes for allowed user", () => {
+  const allowed = new Set(["111", "222"]);
+  validateAllowedUser("111", allowed); // Should not throw
+  validateAllowedUser("222", allowed);
+});
+
+test("throws for disallowed user", () => {
+  const allowed = new Set(["111", "222"]);
+  assert.throws(
+    () => validateAllowedUser("999", allowed),
+    /not in DISCORD_ALLOWED_USERS/
+  );
+});
+
+test("skips validation when whitelist is empty", () => {
+  const allowed = new Set<string>();
+  validateAllowedUser("anyone", allowed); // Should not throw
 });
 
 // ---------------------------------------------------------------------------

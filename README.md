@@ -1,61 +1,106 @@
 # agent-discord
 
-An **MCP (Model Context Protocol) server** that lets any MCP-capable agent — such as [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — communicate with Discord through a bot: send messages, read messages, list servers and channels, and wait for replies.
+A provider-agnostic MCP server that gives any AI agent a Discord communication channel — from low-level message access to high-level, thread-based human-in-the-loop conversations.
 
-## Features
+**Why does this exist?** Claude Code has dispatch. Cursor has its own notification system. Every AI tool reinvents "talk to the human." This is the MCP answer: one Discord server, any agent, zero vendor lock-in.
 
-| MCP Tool | Description |
-|---|---|
-| `list_guilds` | List every Discord server the bot is in |
-| `list_channels` | List all text channels in a guild |
-| `send_message` | Send a message to a channel |
-| `read_messages` | Read recent messages from the in-memory cache |
-| `get_channel_history` | Fetch paginated message history via the Discord API |
-| `wait_for_message` | Poll until a matching message arrives (great for command-response flows) |
+## How It Works
 
-## Requirements
+```
+┌─────────────┐     STDIO/MCP      ┌──────────────────┐     Discord API    ┌─────────────┐
+│  Any Agent   │◄──────────────────►│  agent-discord   │◄──────────────────►│   Discord    │
+│ (Claude Code,│                    │   MCP Server     │   create thread    │   Server     │
+│  Cursor,     │  11 MCP tools      │                  │   post message     │              │
+│  custom)     │                    │   Discord Bot    │   poll replies     │  👤 You      │
+└─────────────┘                     └──────────────────┘                    └─────────────┘
+```
 
-- **Node.js 18+**
-- A **Discord bot token** with the following permissions:
-  - Bot scopes: `bot`, `applications.commands`
-  - Text permissions: *Send Messages*, *Read Message History*, *View Channels*
-  - **Privileged Gateway Intents**: *Message Content Intent* (required to read message bodies)
+### Thread-Based Conversations (Recommended)
+
+1. Agent calls `send_thread_message` — bot creates a thread, pings you
+2. You reply in the thread
+3. Agent calls `wait_for_reply` to get your response
+4. Long messages automatically chunk across multiple Discord messages
+
+### Low-Level Access
+
+Agents can also directly list guilds/channels, send raw messages, read cache, fetch history, and poll for keyword matches — useful for monitoring, logging, or custom flows.
+
+## MCP Tools
+
+### High-Level (Thread Conversations)
+
+| Tool | Description |
+|------|-------------|
+| `send_thread_message` | Send a message to a whitelisted user via a thread. Creates a new thread or posts in an existing one. |
+| `wait_for_reply` | Poll a thread for the human's reply (configurable timeout). |
+| `send_and_wait` | Send + wait in one call. Best for simple Q&A exchanges. |
+| `list_conversations` | List all active thread conversations. |
+| `get_thread_messages` | Fetch full message history from a thread. |
+
+### Low-Level (Raw Discord)
+
+| Tool | Description |
+|------|-------------|
+| `list_guilds` | List all servers the bot is in. |
+| `list_channels` | List text channels in a guild. |
+| `send_message` | Send a message to any channel. |
+| `read_messages` | Read recent messages from the in-memory cache. |
+| `get_channel_history` | Fetch paginated message history via API. |
+| `wait_for_message` | Poll until a matching message arrives (keyword filter). |
 
 ## Setup
 
-### 1 — Create a Discord bot
+### 1. Create a Discord Bot
 
-1. Go to <https://discord.com/developers/applications> → **New Application**.
-2. Navigate to **Bot** → **Add Bot**.
-3. Under **Privileged Gateway Intents**, enable **Message Content Intent**.
-4. Copy the **Bot Token** (keep it secret).
-5. Under **OAuth2 → URL Generator**, select scopes `bot` and permissions *Send Messages + Read Message History + View Channels*.
-6. Open the generated URL and invite the bot to your server.
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications) → New Application
+2. Navigate to **Bot** → create bot
+3. Enable **Privileged Gateway Intents**:
+   - Message Content Intent
+   - Server Members Intent (optional but recommended)
+4. Copy the bot token
+5. Generate an invite URL (OAuth2 → URL Generator) with permissions:
+   - Send Messages
+   - Create Public Threads
+   - Send Messages in Threads
+   - Read Message History
+   - Manage Threads
+   - View Channels
+6. Invite the bot to your server
 
-### 2 — Configure the server
+### 2. Configure
 
 ```bash
-git clone https://github.com/anthony-maio/agent-discord.git
-cd agent-discord
-npm install
 cp .env.example .env
 ```
 
 Edit `.env`:
 
 ```env
-DISCORD_BOT_TOKEN=your-bot-token-here
-DISCORD_GUILD_ID=your-default-server-id   # optional
-MESSAGE_CACHE_SIZE=100                      # optional
+DISCORD_BOT_TOKEN=your-bot-token
+DISCORD_GUILD_ID=your-server-id          # For list_channels default
+DISCORD_CHANNEL_ID=your-channel-id       # Where threads get created
+DISCORD_ALLOWED_USERS=your-user-id       # Comma-separated for multiple
+REPLY_TIMEOUT_SECONDS=300                 # 5 min default
+POLL_INTERVAL_MS=2000                     # How often to check for replies
 ```
 
-### 3 — Build
+**Finding IDs:** Enable Developer Mode in Discord settings → right-click channel/user → Copy ID.
+
+### 3. Install & Build
 
 ```bash
+npm install
 npm run build
 ```
 
-### 4 — Wire into an MCP-capable agent
+### 4. Configure Your MCP Client
+
+#### Claude Code (CLI)
+
+```bash
+claude mcp add discord -- node /absolute/path/to/agent-discord/dist/index.js
+```
 
 #### Claude Desktop (`claude_desktop_config.json`)
 
@@ -66,100 +111,66 @@ npm run build
       "command": "node",
       "args": ["/absolute/path/to/agent-discord/dist/index.js"],
       "env": {
-        "DISCORD_BOT_TOKEN": "your-bot-token-here",
-        "DISCORD_GUILD_ID": "your-server-id"
+        "DISCORD_BOT_TOKEN": "your-token",
+        "DISCORD_GUILD_ID": "your-server-id",
+        "DISCORD_CHANNEL_ID": "your-channel-id",
+        "DISCORD_ALLOWED_USERS": "your-user-id"
       }
     }
   }
 }
 ```
 
-#### Claude Code (via CLI)
+#### Any STDIO MCP Client
 
 ```bash
-claude mcp add discord -- node /absolute/path/to/agent-discord/dist/index.js
+node dist/index.js
 ```
 
-Then set the env vars in your shell or in Claude Code's config.
+## Usage Examples
 
-#### Run directly (for testing)
-
-```bash
-npm start
-# or during development
-npm run dev
+**Agent asks a question and waits for your answer:**
+```
+→ send_and_wait(content="I found 3 approaches for the auth refactor. Want me to list them?")
+← { "status": "replied", "thread_id": "123", "reply": "Yeah, show me all three" }
 ```
 
-## MCP Tool Reference
-
-### `list_guilds`
-
-Returns all Discord servers the bot is a member of.
-
-```json
-// No input required
+**Agent sends a status update in an ongoing conversation:**
+```
+→ send_thread_message(content="Finished refactoring auth. 47 tests pass.", thread_id="123")
+← { "status": "sent", "thread_id": "123" }
 ```
 
-### `list_channels`
-
-```json
-{
-  "guild_id": "123456789012345678"   // optional if DISCORD_GUILD_ID is set
-}
+**Agent checks conversation history:**
+```
+→ get_thread_messages(thread_id="123", limit=20)
+← { "messages": [{ "author": "Agent", "content": "...", ... }, ...] }
 ```
 
-### `send_message`
-
-```json
-{
-  "channel_id": "987654321098765432",
-  "message": "Hello from the agent!"
-}
+**Agent monitors a channel for approvals (low-level):**
+```
+→ send_message(channel_id="456", message="Deploy to prod? Reply 'approve' to confirm.")
+← { "message_id": "789" }
+→ wait_for_message(channel_id="456", keyword="approve", after_message_id="789", timeout_seconds=120)
+← { "content": "approve", ... }
 ```
 
-Returns `{ "message_id": "...", "timestamp": "..." }`.
+## Security
 
-### `read_messages`
+- **Whitelist enforcement.** Thread-based tools only allow users in `DISCORD_ALLOWED_USERS`.
+- **Thread isolation.** Each agent conversation gets its own thread.
+- **No inbound commands.** The bot doesn't accept arbitrary commands from Discord.
+- **Logs to stderr.** MCP protocol uses stdout; all logging goes to stderr.
+- **Low-level tools are unrestricted** — they access any channel the bot can see. Use thread-based tools for controlled human-in-the-loop flows.
 
-```json
-{
-  "channel_id": "987654321098765432",  // optional filter
-  "limit": 20                          // 1–100, default 20
-}
-```
+## Architecture
 
-Returns an array of messages from the in-process cache.
+The server runs two things concurrently:
 
-### `get_channel_history`
+1. **Discord bot** (discord.js) — connects to Discord, manages threads, caches messages
+2. **MCP server** (@modelcontextprotocol/sdk) — listens on STDIO for tool calls
 
-```json
-{
-  "channel_id": "987654321098765432",
-  "limit": 50,         // 1–100, default 50
-  "before": "...",     // message ID for pagination (optional)
-  "after": "..."       // message ID for pagination (optional)
-}
-```
-
-### `wait_for_message`
-
-```json
-{
-  "channel_id": "987654321098765432",
-  "keyword": "approve",         // optional substring filter
-  "timeout_seconds": 60,        // 1–300, default 60
-  "after_message_id": "..."     // only see messages newer than this ID
-}
-```
-
-Returns the matching message or `{ "timed_out": true }`.
-
-## Use case: Claude Code command-and-control
-
-1. A human operator opens a Discord channel (e.g. `#claude-code`).
-2. Claude Code is given access to this MCP server.
-3. Claude Code sends a progress update via `send_message`, then calls `wait_for_message` to block until the operator types `approve` or `reject` before proceeding with a destructive action.
-4. All activity is logged in Discord, giving the team a persistent audit trail.
+The Discord client logs in immediately on startup. MCP tools wait for the client to be ready before executing. Messages longer than Discord's 2000-char limit are automatically chunked at newline boundaries.
 
 ## Development
 
@@ -167,12 +178,21 @@ Returns the matching message or `{ "timed_out": true }`.
 # Run tests (no live Discord connection required)
 npm test
 
-# TypeScript watch mode
-npx tsc --watch
-
-# Dev mode (tsx hot-reload)
+# Dev mode with hot-reload
 npm run dev
+
+# TypeScript watch
+npx tsc --watch
 ```
+
+## Future Ideas
+
+- [ ] SSE transport for remote/multi-agent access
+- [ ] File/image attachment support via threads
+- [ ] Reaction-based quick responses (👍 = yes, 👎 = no)
+- [ ] Persistent conversation state across server restarts
+- [ ] Rate limiting per agent
+- [ ] Webhook mode for push-based replies (no polling)
 
 ## License
 
