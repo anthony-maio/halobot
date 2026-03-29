@@ -34,6 +34,13 @@ import {
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import {
+  serializeMessage,
+  chunkMessage,
+  validateAllowedUser,
+  getDefaultUserId,
+  formatThreadName,
+} from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -116,32 +123,6 @@ const conversations = new Map<string, Conversation>();
 // ---------------------------------------------------------------------------
 
 /**
- * Serialise a discord.js Message into a plain JSON-serialisable object.
- */
-function serializeMessage(msg: Message) {
-  return {
-    id: msg.id,
-    channel_id: msg.channelId,
-    guild_id: msg.guildId ?? null,
-    author: {
-      id: msg.author.id,
-      username: msg.author.username,
-      bot: msg.author.bot,
-    },
-    content: msg.content,
-    timestamp: msg.createdAt.toISOString(),
-    attachments: [...msg.attachments.values()].map((a) => ({
-      url: a.url,
-      name: a.name,
-    })),
-    embeds: msg.embeds.map((e) => ({
-      title: e.title,
-      description: e.description,
-    })),
-  };
-}
-
-/**
  * Wait up to `timeoutMs` for the Discord client to reach "ready" state.
  */
 function waitForReady(timeoutMs = 15_000): Promise<void> {
@@ -171,59 +152,6 @@ async function resolveTextChannel(channelId: string): Promise<TextChannel> {
   return channel;
 }
 
-/**
- * Validate that a user ID is in the allowed list (for thread-based tools).
- */
-function validateAllowedUser(userId: string): void {
-  if (ALLOWED_USERS.size === 0) return; // No whitelist configured
-  if (!ALLOWED_USERS.has(userId)) {
-    throw new Error(
-      `User ${userId} is not in DISCORD_ALLOWED_USERS. ` +
-        `Allowed: ${[...ALLOWED_USERS].join(", ")}`
-    );
-  }
-}
-
-/**
- * Split a message into Discord-safe chunks, breaking at newlines when possible.
- */
-function chunkMessage(content: string): string[] {
-  if (content.length <= MAX_MESSAGE_LENGTH) return [content];
-
-  const chunks: string[] = [];
-  let remaining = content;
-
-  while (remaining.length > 0) {
-    if (remaining.length <= MAX_MESSAGE_LENGTH) {
-      chunks.push(remaining);
-      break;
-    }
-
-    // Try to break at the last newline within the limit
-    let cut = remaining.lastIndexOf("\n", MAX_MESSAGE_LENGTH);
-    if (cut === -1 || cut < MAX_MESSAGE_LENGTH / 2) {
-      // No good newline — hard cut
-      cut = MAX_MESSAGE_LENGTH;
-    }
-
-    chunks.push(remaining.slice(0, cut));
-    remaining = remaining.slice(cut).replace(/^\n/, "");
-  }
-
-  return chunks;
-}
-
-/**
- * Get the default user ID (first allowed user, or throw).
- */
-function getDefaultUserId(): string {
-  if (ALLOWED_USERS.size === 0) {
-    throw new Error(
-      "No user_id provided and DISCORD_ALLOWED_USERS is not configured."
-    );
-  }
-  return [...ALLOWED_USERS][0];
-}
 
 // ---------------------------------------------------------------------------
 // MCP Server
@@ -320,7 +248,7 @@ server.registerTool(
   },
   async ({ channel_id, message }) => {
     const channel = await resolveTextChannel(channel_id);
-    const chunks = chunkMessage(message);
+    const chunks = chunkMessage(message, MAX_MESSAGE_LENGTH);
     let lastSent: Message | null = null;
     for (const chunk of chunks) {
       lastSent = await channel.send(chunk);
@@ -555,8 +483,8 @@ server.registerTool(
   async ({ content, user_id, agent_name, thread_id, channel_id }) => {
     await waitForReady();
 
-    const targetUser = user_id ?? getDefaultUserId();
-    validateAllowedUser(targetUser);
+    const targetUser = user_id ?? getDefaultUserId(ALLOWED_USERS);
+    validateAllowedUser(targetUser, ALLOWED_USERS);
     const agentLabel = agent_name ?? "Agent";
     const targetChannel = channel_id ?? DEFAULT_CHANNEL_ID;
 
@@ -599,12 +527,7 @@ server.registerTool(
         `🤖 **${agentLabel}** is requesting your attention, <@${targetUser}>.`
       );
       thread = await rootMsg.startThread({
-        name: `${agentLabel} — ${new Date().toLocaleString("en-US", {
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        })}`,
+        name: formatThreadName(agentLabel, new Date()),
         autoArchiveDuration: 1440, // 24 hours
       });
       conv = {
@@ -619,7 +542,7 @@ server.registerTool(
     }
 
     // Send content in chunks
-    const chunks = chunkMessage(content);
+    const chunks = chunkMessage(content, MAX_MESSAGE_LENGTH);
     let lastSent: Message | null = null;
     for (const chunk of chunks) {
       lastSent = await thread.send(`**${agentLabel}:**\n${chunk}`);
@@ -802,8 +725,8 @@ server.registerTool(
   }) => {
     await waitForReady();
 
-    const targetUser = user_id ?? getDefaultUserId();
-    validateAllowedUser(targetUser);
+    const targetUser = user_id ?? getDefaultUserId(ALLOWED_USERS);
+    validateAllowedUser(targetUser, ALLOWED_USERS);
     const agentLabel = agent_name ?? "Agent";
     const targetChannel = channel_id ?? DEFAULT_CHANNEL_ID;
 
@@ -827,12 +750,7 @@ server.registerTool(
         `🤖 **${agentLabel}** is requesting your attention, <@${targetUser}>.`
       );
       thread = await rootMsg.startThread({
-        name: `${agentLabel} — ${new Date().toLocaleString("en-US", {
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        })}`,
+        name: formatThreadName(agentLabel, new Date()),
         autoArchiveDuration: 1440,
       });
       conv = {
@@ -846,7 +764,7 @@ server.registerTool(
       conversations.set(thread.id, conv);
     }
 
-    const chunks = chunkMessage(content);
+    const chunks = chunkMessage(content, MAX_MESSAGE_LENGTH);
     let lastSent: Message | null = null;
     for (const chunk of chunks) {
       lastSent = await thread.send(`**${agentLabel}:**\n${chunk}`);
