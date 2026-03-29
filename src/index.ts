@@ -938,6 +938,15 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  const shutdown = () => {
+    process.stderr.write("Shutting down…\n");
+    discordClient.destroy();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 main().catch((err) => {
