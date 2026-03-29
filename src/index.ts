@@ -146,6 +146,139 @@ async function resolveTextChannel(channelId: string): Promise<TextChannel> {
   return channel;
 }
 
+/**
+ * Resolve an existing thread or create a new one.
+ * Handles all three cases: tracked thread_id, untracked thread_id, and no thread_id.
+ */
+async function resolveOrCreateThread(opts: {
+  thread_id?: string;
+  channel_id: string;
+  user_id: string;
+  agent_name: string;
+}): Promise<{ thread: ThreadChannel; conv: Conversation }> {
+  const { thread_id, channel_id, user_id, agent_name } = opts;
+
+  if (thread_id) {
+    const conv = conversations.get(thread_id);
+    const fetched = await discordClient.channels.fetch(thread_id);
+    if (!fetched || !fetched.isThread()) {
+      throw new Error(`Thread ${thread_id} not found or not a thread`);
+    }
+    const thread = fetched as ThreadChannel;
+
+    if (conv) {
+      return { thread, conv };
+    }
+
+    const newConv: Conversation = {
+      thread_id: thread.id,
+      channel_id: thread.parentId ?? channel_id,
+      user_id,
+      agent_name,
+      created_at: new Date().toISOString(),
+      last_agent_message_id: null,
+    };
+    conversations.set(thread.id, newConv);
+    return { thread, conv: newConv };
+  }
+
+  if (!channel_id) {
+    throw new Error(
+      "channel_id is required (or set DISCORD_CHANNEL_ID) to create a new thread."
+    );
+  }
+  const channel = await resolveTextChannel(channel_id);
+  const rootMsg = await channel.send(
+    `🤖 **${agent_name}** is requesting your attention, <@${user_id}>.`
+  );
+  const thread = await rootMsg.startThread({
+    name: formatThreadName(agent_name, new Date()),
+    autoArchiveDuration: 1440,
+  });
+  const conv: Conversation = {
+    thread_id: thread.id,
+    channel_id,
+    user_id,
+    agent_name,
+    created_at: new Date().toISOString(),
+    last_agent_message_id: null,
+  };
+  conversations.set(thread.id, conv);
+  return { thread, conv };
+}
+
+/**
+ * Send chunked content to a thread and update the conversation's last message ID.
+ */
+async function sendToThread(
+  thread: ThreadChannel,
+  conv: Conversation,
+  agentName: string,
+  content: string
+): Promise<{ chunks_sent: number }> {
+  const chunks = chunkMessage(content, MAX_MESSAGE_LENGTH);
+  let lastSent: Message | undefined;
+  for (const chunk of chunks) {
+    lastSent = await thread.send(`**${agentName}:**\n${chunk}`);
+  }
+  if (lastSent) {
+    conv.last_agent_message_id = lastSent.id;
+  }
+  return { chunks_sent: chunks.length };
+}
+
+/**
+ * Poll the messageCache for replies from a specific user in a thread.
+ * Event-driven — no Discord API calls.
+ */
+function pollForReply(
+  conv: Conversation,
+  timeoutMs: number
+): Promise<
+  | { status: "replied"; reply: string; message_count: number }
+  | { status: "timeout" }
+> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+
+    const check = () => {
+      const userMessages = messageCache.filter((m) => {
+        if (m.channelId !== conv.thread_id) return false;
+        if (m.author.id !== conv.user_id) return false;
+        if (m.author.bot) return false;
+        if (
+          conv.last_agent_message_id &&
+          BigInt(m.id) <= BigInt(conv.last_agent_message_id)
+        )
+          return false;
+        return true;
+      });
+
+      if (userMessages.length > 0) {
+        // Advance cursor so the same messages aren't returned again
+        const lastUserMsg = userMessages[userMessages.length - 1];
+        conv.last_agent_message_id = lastUserMsg.id;
+
+        const reply = userMessages.map((m) => m.content).join("\n");
+        resolve({
+          status: "replied",
+          reply,
+          message_count: userMessages.length,
+        });
+        return;
+      }
+
+      if (Date.now() >= deadline) {
+        resolve({ status: "timeout" });
+        return;
+      }
+
+      setTimeout(check, POLL_INTERVAL_MS);
+    };
+
+    check();
+  });
+}
 
 // ---------------------------------------------------------------------------
 // MCP Server
@@ -482,67 +615,14 @@ server.registerTool(
     const agentLabel = agent_name ?? "Agent";
     const targetChannel = channel_id ?? DEFAULT_CHANNEL_ID;
 
-    let thread: ThreadChannel;
-    let conv: Conversation;
+    const { thread, conv } = await resolveOrCreateThread({
+      thread_id,
+      channel_id: targetChannel,
+      user_id: targetUser,
+      agent_name: agentLabel,
+    });
 
-    if (thread_id && conversations.has(thread_id)) {
-      // Continue existing conversation
-      conv = conversations.get(thread_id)!;
-      const fetched = await discordClient.channels.fetch(thread_id);
-      if (!fetched || !fetched.isThread()) {
-        throw new Error(`Thread ${thread_id} not found or not a thread`);
-      }
-      thread = fetched as ThreadChannel;
-    } else if (thread_id) {
-      // thread_id provided but not tracked — try to fetch it anyway
-      const fetched = await discordClient.channels.fetch(thread_id);
-      if (!fetched || !fetched.isThread()) {
-        throw new Error(`Thread ${thread_id} not found or not a thread`);
-      }
-      thread = fetched as ThreadChannel;
-      conv = {
-        thread_id: thread.id,
-        channel_id: thread.parentId ?? targetChannel,
-        user_id: targetUser,
-        agent_name: agentLabel,
-        created_at: new Date().toISOString(),
-        last_agent_message_id: null,
-      };
-      conversations.set(thread.id, conv);
-    } else {
-      // New conversation — create root message + thread
-      if (!targetChannel) {
-        throw new Error(
-          "channel_id is required (or set DISCORD_CHANNEL_ID) to create a new thread."
-        );
-      }
-      const channel = await resolveTextChannel(targetChannel);
-      const rootMsg = await channel.send(
-        `🤖 **${agentLabel}** is requesting your attention, <@${targetUser}>.`
-      );
-      thread = await rootMsg.startThread({
-        name: formatThreadName(agentLabel, new Date()),
-        autoArchiveDuration: 1440, // 24 hours
-      });
-      conv = {
-        thread_id: thread.id,
-        channel_id: targetChannel,
-        user_id: targetUser,
-        agent_name: agentLabel,
-        created_at: new Date().toISOString(),
-        last_agent_message_id: null,
-      };
-      conversations.set(thread.id, conv);
-    }
-
-    // Send content in chunks
-    const chunks = chunkMessage(content, MAX_MESSAGE_LENGTH);
-    let lastSent: Message | null = null;
-    for (const chunk of chunks) {
-      lastSent = await thread.send(`**${agentLabel}:**\n${chunk}`);
-    }
-
-    conv.last_agent_message_id = lastSent?.id ?? null;
+    const { chunks_sent } = await sendToThread(thread, conv, agentLabel, content);
 
     return {
       content: [
@@ -554,7 +634,7 @@ server.registerTool(
               thread_id: conv.thread_id,
               user_id: conv.user_id,
               agent_name: conv.agent_name,
-              chunks_sent: chunks.length,
+              chunks_sent,
             },
             null,
             2
@@ -599,54 +679,31 @@ server.registerTool(
     if (!conv) {
       throw new Error(
         `No tracked conversation for thread ${thread_id}. ` +
-        `Use send_thread_message first.`
+          `Use send_thread_message first.`
       );
     }
 
     const timeoutMs = (timeout_seconds ?? DEFAULT_REPLY_TIMEOUT) * 1000;
-    const deadline = Date.now() + timeoutMs;
+    const result = await pollForReply(conv, timeoutMs);
 
-    const thread = await discordClient.channels.fetch(thread_id);
-    if (!thread || !thread.isThread()) {
-      throw new Error(`Thread ${thread_id} not found`);
-    }
-
-    while (Date.now() < deadline) {
-      // Fetch messages after the last agent message
-      const fetchOpts: Parameters<typeof thread.messages.fetch>[0] = {
-        limit: 100,
+    if (result.status === "replied") {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                status: "replied",
+                thread_id: conv.thread_id,
+                reply: result.reply,
+                message_count: result.message_count,
+              },
+              null,
+              2
+            ),
+          },
+        ],
       };
-      if (conv.last_agent_message_id) {
-        fetchOpts.after = conv.last_agent_message_id;
-      }
-
-      const messages = await thread.messages.fetch(fetchOpts);
-      const userMessages = messages
-        .filter((m) => m.author.id === conv.user_id && !m.author.bot)
-        .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-
-      if (userMessages.size > 0) {
-        const reply = userMessages.map((m) => m.content).join("\n");
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  status: "replied",
-                  thread_id: conv.thread_id,
-                  reply,
-                  message_count: userMessages.size,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
-
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     }
 
     return {
@@ -724,87 +781,17 @@ server.registerTool(
     const agentLabel = agent_name ?? "Agent";
     const targetChannel = channel_id ?? DEFAULT_CHANNEL_ID;
 
-    // --- Send ---
-    let thread: ThreadChannel;
-    let conv: Conversation;
+    const { thread, conv } = await resolveOrCreateThread({
+      thread_id,
+      channel_id: targetChannel,
+      user_id: targetUser,
+      agent_name: agentLabel,
+    });
 
-    if (thread_id && conversations.has(thread_id)) {
-      conv = conversations.get(thread_id)!;
-      const fetched = await discordClient.channels.fetch(thread_id);
-      if (!fetched || !fetched.isThread()) {
-        throw new Error(`Thread ${thread_id} not found`);
-      }
-      thread = fetched as ThreadChannel;
-    } else {
-      if (!targetChannel) {
-        throw new Error("channel_id or DISCORD_CHANNEL_ID required for new threads");
-      }
-      const channel = await resolveTextChannel(targetChannel);
-      const rootMsg = await channel.send(
-        `🤖 **${agentLabel}** is requesting your attention, <@${targetUser}>.`
-      );
-      thread = await rootMsg.startThread({
-        name: formatThreadName(agentLabel, new Date()),
-        autoArchiveDuration: 1440,
-      });
-      conv = {
-        thread_id: thread.id,
-        channel_id: targetChannel,
-        user_id: targetUser,
-        agent_name: agentLabel,
-        created_at: new Date().toISOString(),
-        last_agent_message_id: null,
-      };
-      conversations.set(thread.id, conv);
-    }
+    await sendToThread(thread, conv, agentLabel, content);
 
-    const chunks = chunkMessage(content, MAX_MESSAGE_LENGTH);
-    let lastSent: Message | null = null;
-    for (const chunk of chunks) {
-      lastSent = await thread.send(`**${agentLabel}:**\n${chunk}`);
-    }
-    conv.last_agent_message_id = lastSent?.id ?? null;
-
-    // --- Wait ---
     const timeoutMs = (timeout_seconds ?? DEFAULT_REPLY_TIMEOUT) * 1000;
-    const deadline = Date.now() + timeoutMs;
-
-    while (Date.now() < deadline) {
-      const fetchOpts: Parameters<typeof thread.messages.fetch>[0] = {
-        limit: 100,
-      };
-      if (conv.last_agent_message_id) {
-        fetchOpts.after = conv.last_agent_message_id;
-      }
-
-      const messages = await thread.messages.fetch(fetchOpts);
-      const userMessages = messages
-        .filter((m) => m.author.id === conv.user_id && !m.author.bot)
-        .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-
-      if (userMessages.size > 0) {
-        const reply = userMessages.map((m) => m.content).join("\n");
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  status: "replied",
-                  thread_id: conv.thread_id,
-                  reply,
-                  message_count: userMessages.size,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
-
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-    }
+    const result = await pollForReply(conv, timeoutMs);
 
     return {
       content: [
@@ -812,9 +799,12 @@ server.registerTool(
           type: "text" as const,
           text: JSON.stringify(
             {
-              status: "timeout",
+              status: result.status,
               thread_id: conv.thread_id,
-              reply: null,
+              reply: result.status === "replied" ? result.reply : null,
+              ...(result.status === "replied"
+                ? { message_count: result.message_count }
+                : {}),
             },
             null,
             2
