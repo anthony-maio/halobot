@@ -47,12 +47,6 @@ import {
 // ---------------------------------------------------------------------------
 
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
-if (!DISCORD_BOT_TOKEN) {
-  process.stderr.write(
-    "ERROR: DISCORD_BOT_TOKEN environment variable is required.\n"
-  );
-  process.exit(1);
-}
 
 const DEFAULT_GUILD_ID = process.env.DISCORD_GUILD_ID ?? "";
 const DEFAULT_CHANNEL_ID = process.env.DISCORD_CHANNEL_ID ?? "";
@@ -920,6 +914,10 @@ server.registerTool(
 // ---------------------------------------------------------------------------
 
 async function main() {
+  if (!DISCORD_BOT_TOKEN) {
+    throw new Error("DISCORD_BOT_TOKEN environment variable is required.");
+  }
+
   discordClient.login(DISCORD_BOT_TOKEN).catch((err: unknown) => {
     process.stderr.write(`Discord login failed: ${String(err)}\n`);
     process.exit(1);
