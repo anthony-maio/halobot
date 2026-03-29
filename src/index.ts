@@ -25,6 +25,7 @@ import {
   Client,
   GatewayIntentBits,
   TextChannel,
+  NewsChannel,
   ThreadChannel,
   Collection,
   Message,
@@ -38,6 +39,7 @@ import {
   serializeMessage,
   chunkMessage,
   validateAllowedUser,
+  requireAllowedUsers,
   getDefaultUserId,
   formatThreadName,
 } from "./helpers.js";
@@ -145,14 +147,19 @@ function waitForReady(timeoutMs = 15_000): Promise<void> {
 }
 
 /**
- * Resolve a TextChannel by ID.
+ * Resolve a text-based channel (TextChannel or NewsChannel) by ID.
  */
-async function resolveTextChannel(channelId: string): Promise<TextChannel> {
+async function resolveTextChannel(
+  channelId: string
+): Promise<TextChannel | NewsChannel> {
   await waitForReady();
   const channel = await discordClient.channels.fetch(channelId);
   if (!channel) throw new Error(`Channel ${channelId} not found`);
-  if (!(channel instanceof TextChannel)) {
-    throw new Error(`Channel ${channelId} is not a text channel`);
+  if (
+    !(channel instanceof TextChannel) &&
+    !(channel instanceof NewsChannel)
+  ) {
+    throw new Error(`Channel ${channelId} is not a text-based channel`);
   }
   return channel;
 }
@@ -537,11 +544,18 @@ server.registerTool(
     const deadline = Date.now() + timeoutMs;
     const pollIntervalMs = 500;
 
+    // Use explicit watermark if provided, otherwise snapshot the latest
+    // cached message ID so we only match messages arriving after this call.
+    const watermark =
+      after_message_id ??
+      (messageCache.length > 0
+        ? messageCache[messageCache.length - 1].id
+        : undefined);
+
     while (Date.now() < deadline) {
       const candidate = messageCache.find((m) => {
         if (m.channelId !== channel_id) return false;
-        if (after_message_id && BigInt(m.id) <= BigInt(after_message_id))
-          return false;
+        if (watermark && BigInt(m.id) <= BigInt(watermark)) return false;
         if (keyword && !m.content.includes(keyword)) return false;
         return true;
       });
@@ -621,6 +635,7 @@ server.registerTool(
   },
   async ({ content, user_id, agent_name, thread_id, channel_id }) => {
     await waitForReady();
+    requireAllowedUsers(ALLOWED_USERS);
 
     const targetUser = user_id ?? getDefaultUserId(ALLOWED_USERS);
     validateAllowedUser(targetUser, ALLOWED_USERS);
@@ -686,6 +701,7 @@ server.registerTool(
   },
   async ({ thread_id, timeout_seconds }) => {
     await waitForReady();
+    requireAllowedUsers(ALLOWED_USERS);
 
     const conv = conversations.get(thread_id);
     if (!conv) {
@@ -787,6 +803,7 @@ server.registerTool(
     timeout_seconds,
   }) => {
     await waitForReady();
+    requireAllowedUsers(ALLOWED_USERS);
 
     const targetUser = user_id ?? getDefaultUserId(ALLOWED_USERS);
     validateAllowedUser(targetUser, ALLOWED_USERS);
