@@ -74,6 +74,19 @@ export function validateAllowedUser(
 }
 
 /**
+ * Require that DISCORD_ALLOWED_USERS is configured (non-empty).
+ * Thread-based tools must not operate without a whitelist.
+ */
+export function requireAllowedUsers(allowedUsers: Set<string>): void {
+  if (allowedUsers.size === 0) {
+    throw new Error(
+      "DISCORD_ALLOWED_USERS must be configured for thread-based tools. " +
+        "Set it to a comma-separated list of Discord user IDs."
+    );
+  }
+}
+
+/**
  * Get the default user ID (first allowed user, or throw).
  */
 export function getDefaultUserId(allowedUsers: Set<string>): string {

@@ -9,7 +9,7 @@
 
 import { strict as assert } from "assert";
 import { Message } from "discord.js";
-import { serializeMessage, chunkMessage, validateAllowedUser, getDefaultUserId, formatThreadName } from "./helpers.js";
+import { serializeMessage, chunkMessage, validateAllowedUser, requireAllowedUsers, getDefaultUserId, formatThreadName } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // Minimal stub for a discord.js Message (only the fields we touch)
@@ -315,6 +315,21 @@ test("throws for disallowed user", () => {
 test("skips validation when whitelist is empty", () => {
   const allowed = new Set<string>();
   validateAllowedUser("anyone", allowed); // Should not throw
+});
+
+// --- requireAllowedUsers ---
+
+console.log("\nrequireAllowedUsers");
+
+test("passes when users are configured", () => {
+  requireAllowedUsers(new Set(["111"])); // Should not throw
+});
+
+test("throws when no users configured", () => {
+  assert.throws(
+    () => requireAllowedUsers(new Set()),
+    /DISCORD_ALLOWED_USERS must be configured/
+  );
 });
 
 // --- formatThreadName ---
