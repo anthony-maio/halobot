@@ -8,6 +8,8 @@
  */
 
 import { strict as assert } from "assert";
+import { Message } from "discord.js";
+import { serializeMessage, chunkMessage, validateAllowedUser, getDefaultUserId, formatThreadName } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // Minimal stub for a discord.js Message (only the fields we touch)
@@ -35,33 +37,6 @@ interface StubMessage {
 }
 
 // ---------------------------------------------------------------------------
-// Inline copy of serializeMessage (keeps tests self-contained)
-// ---------------------------------------------------------------------------
-
-function serializeMessage(msg: StubMessage) {
-  return {
-    id: msg.id,
-    channel_id: msg.channelId,
-    guild_id: msg.guildId ?? null,
-    author: {
-      id: msg.author.id,
-      username: msg.author.username,
-      bot: msg.author.bot,
-    },
-    content: msg.content,
-    timestamp: msg.createdAt.toISOString(),
-    attachments: [...msg.attachments.values()].map((a) => ({
-      url: a.url,
-      name: a.name,
-    })),
-    embeds: msg.embeds.map((e) => ({
-      title: e.title,
-      description: e.description,
-    })),
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Inline copy of message-cache read logic
 // ---------------------------------------------------------------------------
 
@@ -73,51 +48,7 @@ function readMessages(
   let msgs = [...cache];
   if (opts.channel_id)
     msgs = msgs.filter((m) => m.channelId === opts.channel_id);
-  return msgs.slice(-max).map(serializeMessage);
-}
-
-// ---------------------------------------------------------------------------
-// Inline copy of chunkMessage
-// ---------------------------------------------------------------------------
-
-function chunkMessage(content: string, maxLen: number = 1900): string[] {
-  if (content.length <= maxLen) return [content];
-
-  const chunks: string[] = [];
-  let remaining = content;
-
-  while (remaining.length > 0) {
-    if (remaining.length <= maxLen) {
-      chunks.push(remaining);
-      break;
-    }
-
-    let cut = remaining.lastIndexOf("\n", maxLen);
-    if (cut === -1 || cut < maxLen / 2) {
-      cut = maxLen;
-    }
-
-    chunks.push(remaining.slice(0, cut));
-    remaining = remaining.slice(cut).replace(/^\n/, "");
-  }
-
-  return chunks;
-}
-
-// ---------------------------------------------------------------------------
-// Inline copy of whitelist validation
-// ---------------------------------------------------------------------------
-
-function validateAllowedUser(
-  userId: string,
-  allowedUsers: Set<string>
-): void {
-  if (allowedUsers.size === 0) return;
-  if (!allowedUsers.has(userId)) {
-    throw new Error(
-      `User ${userId} is not in DISCORD_ALLOWED_USERS. Allowed: ${[...allowedUsers].join(", ")}`
-    );
-  }
+  return msgs.slice(-max).map((m) => serializeMessage(m as unknown as Message));
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +94,7 @@ console.log("\nserializeMessage");
 
 test("serialises basic fields", () => {
   const msg = makeMessage({ content: "ping", id: "42" });
-  const s = serializeMessage(msg);
+  const s = serializeMessage(msg as unknown as Message);
   assert.equal(s.id, "42");
   assert.equal(s.content, "ping");
   assert.equal(s.channel_id, "channel-1");
@@ -174,7 +105,7 @@ test("serialises basic fields", () => {
 
 test("handles null guildId", () => {
   const msg = makeMessage({ guildId: null });
-  assert.equal(serializeMessage(msg).guild_id, null);
+  assert.equal(serializeMessage(msg as unknown as Message).guild_id, null);
 });
 
 test("serialises attachments", () => {
@@ -183,7 +114,7 @@ test("serialises attachments", () => {
     url: "https://example.com/file.png",
     name: "file.png",
   });
-  const s = serializeMessage(msg);
+  const s = serializeMessage(msg as unknown as Message);
   assert.equal(s.attachments.length, 1);
   assert.equal(s.attachments[0].url, "https://example.com/file.png");
 });
@@ -192,14 +123,14 @@ test("serialises embeds", () => {
   const msg = makeMessage({
     embeds: [{ title: "Test", description: "desc" }],
   });
-  const s = serializeMessage(msg);
+  const s = serializeMessage(msg as unknown as Message);
   assert.equal(s.embeds.length, 1);
   assert.equal(s.embeds[0].title, "Test");
 });
 
 test("timestamp is ISO 8601", () => {
   const msg = makeMessage({ createdAt: new Date("2024-06-15T12:00:00.000Z") });
-  assert.equal(serializeMessage(msg).timestamp, "2024-06-15T12:00:00.000Z");
+  assert.equal(serializeMessage(msg as unknown as Message).timestamp, "2024-06-15T12:00:00.000Z");
 });
 
 // --- readMessages ---
@@ -384,6 +315,35 @@ test("throws for disallowed user", () => {
 test("skips validation when whitelist is empty", () => {
   const allowed = new Set<string>();
   validateAllowedUser("anyone", allowed); // Should not throw
+});
+
+// --- formatThreadName ---
+
+console.log("\nformatThreadName");
+
+test("formats with UTC time", () => {
+  const date = new Date("2024-06-15T14:30:00Z");
+  const name = formatThreadName("Agent", date);
+  assert.equal(name, "Agent — Jun 15, 14:30 UTC");
+});
+
+test("pads single-digit hours and minutes", () => {
+  const date = new Date("2024-01-02T03:05:00Z");
+  const name = formatThreadName("Bot", date);
+  assert.equal(name, "Bot — Jan 2, 03:05 UTC");
+});
+
+// --- getDefaultUserId ---
+
+console.log("\ngetDefaultUserId");
+
+test("returns first allowed user", () => {
+  const allowed = new Set(["111", "222"]);
+  assert.equal(getDefaultUserId(allowed), "111");
+});
+
+test("throws when no users configured", () => {
+  assert.throws(() => getDefaultUserId(new Set()), /DISCORD_ALLOWED_USERS/);
 });
 
 // ---------------------------------------------------------------------------
