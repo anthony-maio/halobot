@@ -10,14 +10,24 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx src/index.test.ts"
+    "test": "tsx src/index.test.ts",
+    "setup": "tsx src/index.ts setup",
+    "doctor": "tsx src/index.ts doctor"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/anthony-maio/halobot.git"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "mcp",
+    "discord",
+    "ai-agent",
+    "human-in-the-loop",
+    "claude",
+    "model-context-protocol",
+    "halobot"
+  ],
+  "author": "Anthony Maio",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
