@@ -1,4 +1,17 @@
 #!/usr/bin/env node
+
+// CLI subcommands — handled before any MCP/Discord initialization
+if (process.argv[2] === "setup" || process.argv[2] === "doctor") {
+  const cmd = process.argv[2];
+  import("./cli.js").then((cli) => {
+    const fn = cmd === "setup" ? cli.setup : cli.doctor;
+    fn().catch((err) => {
+      process.stderr.write(`Error: ${String(err)}\n`);
+      process.exit(1);
+    });
+  });
+}
+
 /**
  * halobot: An MCP server that allows any MCP-capable agent to
  * communicate with Discord — send messages, read messages, list guilds and
@@ -934,7 +947,12 @@ server.registerTool(
 
 async function main() {
   if (!DISCORD_BOT_TOKEN) {
-    throw new Error("DISCORD_BOT_TOKEN environment variable is required.");
+    process.stderr.write(
+      '\n  Missing DISCORD_BOT_TOKEN.\n' +
+      '  Run "halobot setup" for guided configuration,\n' +
+      '  or "halobot doctor" to diagnose an existing setup.\n\n'
+    );
+    process.exit(1);
   }
 
   discordClient.login(DISCORD_BOT_TOKEN).catch((err: unknown) => {
@@ -968,7 +986,10 @@ async function main() {
   process.on("SIGTERM", shutdown);
 }
 
-main().catch((err) => {
-  process.stderr.write(`Fatal error: ${String(err)}\n`);
-  process.exit(1);
-});
+// Only start MCP server if not running a CLI subcommand
+if (process.argv[2] !== "setup" && process.argv[2] !== "doctor") {
+  main().catch((err) => {
+    process.stderr.write(`Fatal error: ${String(err)}\n`);
+    process.exit(1);
+  });
+}
