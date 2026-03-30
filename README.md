@@ -49,70 +49,58 @@ Agents can also directly list guilds/channels, send raw messages, read cache, fe
 | `get_channel_history` | Fetch paginated message history via API. |
 | `wait_for_message` | Poll until a matching message arrives (keyword filter). |
 
-## Setup
+## Quick Start
 
-### 1. Create a Discord Bot
+```bash
+# Install globally
+npm install -g halobot
+
+# Interactive setup — walks you through everything
+halobot setup
+```
+
+The setup wizard will:
+1. Link you to the Discord Developer Portal to create a bot
+2. Generate the invite URL with correct permissions
+3. Collect your channel and user IDs
+4. Validate everything works (login, permissions, channel access)
+5. Optionally add halobot to Claude Code automatically
+
+### Manual Setup
+
+If you prefer to configure manually:
+
+#### 1. Create a Discord Bot
 
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications) → New Application
 2. Navigate to **Bot** → create bot
-3. Enable **Privileged Gateway Intents**:
-   - Message Content Intent
-   - Server Members Intent (optional but recommended)
+3. Enable **Message Content Intent** under Privileged Gateway Intents
 4. Copy the bot token
-5. Generate an invite URL (OAuth2 → URL Generator) with permissions:
-   - Send Messages
-   - Create Public Threads
-   - Send Messages in Threads
-   - Read Message History
-   - Manage Threads
-   - View Channels
-6. Invite the bot to your server
+5. Invite the bot using OAuth2 URL Generator with `bot` scope and these permissions:
+   - Send Messages, Create Public Threads, Send Messages in Threads
+   - Read Message History, Manage Threads, View Channels
 
-### 2. Configure
+#### 2. Configure Your MCP Client
+
+**Claude Code (CLI):**
 
 ```bash
-cp .env.example .env
+claude mcp add halobot \
+  -e DISCORD_BOT_TOKEN=your-token \
+  -e DISCORD_CHANNEL_ID=your-channel-id \
+  -e DISCORD_ALLOWED_USERS=your-user-id \
+  -- halobot
 ```
 
-Edit `.env`:
-
-```env
-DISCORD_BOT_TOKEN=your-bot-token
-DISCORD_GUILD_ID=your-server-id          # For list_channels default
-DISCORD_CHANNEL_ID=your-channel-id       # Where threads get created
-DISCORD_ALLOWED_USERS=your-user-id       # Comma-separated for multiple
-REPLY_TIMEOUT_SECONDS=300                 # 5 min default
-POLL_INTERVAL_MS=2000                     # How often to check for replies
-```
-
-**Finding IDs:** Enable Developer Mode in Discord settings → right-click channel/user → Copy ID.
-
-### 3. Install & Build
-
-```bash
-npm install
-npm run build
-```
-
-### 4. Configure Your MCP Client
-
-#### Claude Code (CLI)
-
-```bash
-claude mcp add discord -- node /absolute/path/to/halobot/dist/index.js
-```
-
-#### Claude Desktop (`claude_desktop_config.json`)
+**Claude Desktop (`claude_desktop_config.json`):**
 
 ```json
 {
   "mcpServers": {
-    "discord": {
-      "command": "node",
-      "args": ["/absolute/path/to/halobot/dist/index.js"],
+    "halobot": {
+      "command": "halobot",
       "env": {
         "DISCORD_BOT_TOKEN": "your-token",
-        "DISCORD_GUILD_ID": "your-server-id",
         "DISCORD_CHANNEL_ID": "your-channel-id",
         "DISCORD_ALLOWED_USERS": "your-user-id"
       }
@@ -121,10 +109,16 @@ claude mcp add discord -- node /absolute/path/to/halobot/dist/index.js
 }
 ```
 
-#### Any STDIO MCP Client
+**Finding IDs:** Enable Developer Mode in Discord settings → right-click channel/user → Copy ID.
+
+### Diagnostics
 
 ```bash
-node dist/index.js
+# Check your setup
+halobot doctor
+
+# Check setup and send a test message
+halobot doctor --test
 ```
 
 ## Usage Examples
