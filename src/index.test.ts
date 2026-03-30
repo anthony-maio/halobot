@@ -1,5 +1,5 @@
 /**
- * Unit tests for agent-discord MCP server helper logic.
+ * Unit tests for halobot MCP server helper logic.
  *
  * These tests do NOT require a live Discord connection or real bot token.
  * They exercise the pure-logic helpers (message serialisation, cache

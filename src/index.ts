@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * agent-discord: An MCP server that allows any MCP-capable agent to
+ * halobot: An MCP server that allows any MCP-capable agent to
  * communicate with Discord — send messages, read messages, list guilds and
  * channels, manage threaded conversations, and wait for replies.
  *
@@ -304,7 +304,7 @@ function pollForReply(
 // ---------------------------------------------------------------------------
 
 const server = new McpServer({
-  name: "agent-discord",
+  name: "halobot",
   version: "2.0.0",
 });
 

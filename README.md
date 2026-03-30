@@ -1,6 +1,6 @@
-# agent-discord
+# halobot
 
-A provider-agnostic MCP server that gives any AI agent a Discord communication channel — from low-level message access to high-level, thread-based human-in-the-loop conversations.
+**Human-Agent Loop Over Bot** — an MCP server that gives any AI agent a Discord communication channel, from low-level message access to high-level, thread-based human-in-the-loop conversations.
 
 **Why does this exist?** Claude Code has dispatch. Cursor has its own notification system. Every AI tool reinvents "talk to the human." This is the MCP answer: one Discord server, any agent, zero vendor lock-in.
 
@@ -8,10 +8,10 @@ A provider-agnostic MCP server that gives any AI agent a Discord communication c
 
 ```
 ┌─────────────┐     STDIO/MCP      ┌──────────────────┐     Discord API    ┌─────────────┐
-│  Any Agent   │◄──────────────────►│  agent-discord   │◄──────────────────►│   Discord    │
+│  Any Agent   │◄──────────────────►│    halobot       │◄──────────────────►│   Discord    │
 │ (Claude Code,│                    │   MCP Server     │   create thread    │   Server     │
 │  Cursor,     │  11 MCP tools      │                  │   post message     │              │
-│  custom)     │                    │   Discord Bot    │   poll replies     │  👤 You      │
+│  custom)     │                    │   Discord Bot    │   wait for reply   │  👤 You      │
 └─────────────┘                     └──────────────────┘                    └─────────────┘
 ```
 
@@ -99,7 +99,7 @@ npm run build
 #### Claude Code (CLI)
 
 ```bash
-claude mcp add discord -- node /absolute/path/to/agent-discord/dist/index.js
+claude mcp add discord -- node /absolute/path/to/halobot/dist/index.js
 ```
 
 #### Claude Desktop (`claude_desktop_config.json`)
@@ -109,7 +109,7 @@ claude mcp add discord -- node /absolute/path/to/agent-discord/dist/index.js
   "mcpServers": {
     "discord": {
       "command": "node",
-      "args": ["/absolute/path/to/agent-discord/dist/index.js"],
+      "args": ["/absolute/path/to/halobot/dist/index.js"],
       "env": {
         "DISCORD_BOT_TOKEN": "your-token",
         "DISCORD_GUILD_ID": "your-server-id",

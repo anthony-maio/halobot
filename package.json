@@ -1,10 +1,10 @@
 {
-  "name": "agent-discord",
-  "version": "2.0.0",
-  "description": "An MCP server that allows any agent to interact through a bot on Discord",
+  "name": "halobot",
+  "version": "2.1.0",
+  "description": "MCP server that connects AI agents to humans via Discord threads (Human-Agent Loop Over Bot)",
   "main": "dist/index.js",
   "bin": {
-    "agent-discord": "dist/index.js"
+    "halobot": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -14,16 +14,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/anthony-maio/agent-discord.git"
+    "url": "git+https://github.com/anthony-maio/halobot.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/anthony-maio/agent-discord/issues"
+    "url": "https://github.com/anthony-maio/halobot/issues"
   },
-  "homepage": "https://github.com/anthony-maio/agent-discord#readme",
+  "homepage": "https://github.com/anthony-maio/halobot#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
     "discord.js": "^14.25.1",
