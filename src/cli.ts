@@ -468,7 +468,7 @@ export async function setup(): Promise<void> {
             "--",
             "npx",
             "-y",
-            "halobot",
+            "@anthony-maio/halobot",
           ],
           { stdio: "inherit" }
         );
@@ -496,14 +496,14 @@ export async function setup(): Promise<void> {
   info(`      -e DISCORD_BOT_TOKEN=${token} \\`);
   info(`      -e DISCORD_CHANNEL_ID=${channelId} \\`);
   info(`      -e DISCORD_ALLOWED_USERS=${allowedUsers.join(",")} \\`);
-  info(`      -- npx -y halobot\n`);
+  info(`      -- npx -y @anthony-maio/halobot\n`);
 
   info("  \x1b[1mClaude Desktop (claude_desktop_config.json):\x1b[0m\n");
   const desktopConfig = {
     mcpServers: {
       halobot: {
         command: "npx",
-        args: ["-y", "halobot"],
+        args: ["-y", "@anthony-maio/halobot"],
         env: {
           DISCORD_BOT_TOKEN: token,
           DISCORD_CHANNEL_ID: channelId,

@@ -3,7 +3,6 @@
     "halobot": {
       "command": "npx",
       "args": ["-y", "@anthony-maio/halobot"],
-      "_note": "env vars below must be filled in by the user",
       "env": {
         "DISCORD_BOT_TOKEN": "",
         "DISCORD_CHANNEL_ID": "",
