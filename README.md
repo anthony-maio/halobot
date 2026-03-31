@@ -53,7 +53,7 @@ Agents can also directly list guilds/channels, send raw messages, read cache, fe
 
 ```bash
 # Install globally
-npm install -g halobot
+npm install -g @anthony-maio/halobot
 
 # Interactive setup — walks you through everything
 halobot setup
