@@ -2,8 +2,9 @@
   "name": "@anthony-maio/halobot",
   "version": "2.1.0",
   "description": "MCP server that connects AI agents to humans via Discord threads (Human-Agent Loop Over Bot)",
-  "main": "dist/index.js",
+  "main": "dist/main.js",
   "files": [
+    "dist/main.js",
     "dist/index.js",
     "dist/index.d.ts",
     "dist/cli.js",
@@ -14,7 +15,7 @@
     "README.md"
   ],
   "bin": {
-    "halobot": "dist/index.js"
+    "halobot": "dist/main.js"
   },
   "scripts": {
     "build": "tsc",
