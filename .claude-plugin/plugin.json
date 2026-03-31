@@ -1,0 +1,15 @@
+{
+  "name": "halobot",
+  "description": "Human-Agent Loop Over Bot — give any AI agent a Discord communication channel for human-in-the-loop conversations via threads.",
+  "version": "2.1.0",
+  "author": {
+    "name": "Anthony Maio"
+  },
+  "keywords": [
+    "discord",
+    "mcp",
+    "human-in-the-loop",
+    "messaging",
+    "ai-agent"
+  ]
+}
