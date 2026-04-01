@@ -1,47 +1,94 @@
+<div align="center">
+
 # halobot
 
-**Human-Agent Loop Over Bot** — an MCP server that gives any AI agent a Discord communication channel, from low-level message access to high-level, thread-based human-in-the-loop conversations.
+**Your AI agent needs a phone number. Discord is it.**
 
-**Why does this exist?** Claude Code has dispatch. Cursor has its own notification system. Every AI tool reinvents "talk to the human." This is the MCP answer: one Discord server, any agent, zero vendor lock-in.
+[![npm version](https://img.shields.io/npm/v/@anthony-maio/halobot)](https://www.npmjs.com/package/@anthony-maio/halobot)
+[![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
+[![MCP Tools](https://img.shields.io/badge/MCP_Tools-11-orange)]()
+[![TypeScript](https://img.shields.io/badge/TypeScript-99.4%25-blue)]()
 
-## How It Works
+An open-source MCP server that gives any AI agent a Discord communication channel.
+Agents ask questions, wait for your reply, and keep working -- from your phone, desktop, wherever.
+
+**H**uman-**A**gent **L**oop **O**ver **B**ot
+
+[Documentation](https://halobot.making-minds.ai) . [Quickstart](https://halobot.making-minds.ai/#quickstart) . [GitHub](https://github.com/anthony-maio/halobot)
+
+</div>
+
+---
+
+## The problem
+
+Your agent is three hours into a refactoring task. It hits an ambiguous requirement. It guesses. It picks the wrong interpretation. It builds 400 lines on a bad assumption. You come back, see the mess, and start over.
+
+Claude Code has dispatch. Cursor has its own notification system. Every AI tool reinvents "talk to the human."
+
+halobot is the MCP answer: **one Discord server, any agent, zero vendor lock-in.**
+
+| Without halobot | With halobot |
+|---|---|
+| Agent guesses at ambiguous requirements | Agent asks, you answer, work continues |
+| You discover mistakes hours later | Respond from your phone, desktop, wherever |
+| No way to reach you outside the IDE | Works with any MCP client |
+| Each tool builds its own notification system | One protocol, every agent |
+| 3 AM deploys you didn't approve | Explicit approval gates for critical ops |
+
+## Quick start
+
+```bash
+# Install globally
+npm install -g @anthony-maio/halobot
+
+# Interactive setup -- walks you through everything
+halobot setup
+```
+
+That's it. The setup wizard links you to the Discord Developer Portal, generates the invite URL, collects your IDs, validates everything, and optionally configures Claude Code automatically.
+
+```bash
+# Check your setup
+halobot doctor
+
+# Check setup and send a test message
+halobot doctor --test
+```
+
+## How it works
 
 ```
-┌─────────────┐     STDIO/MCP      ┌──────────────────┐     Discord API    ┌─────────────┐
-│  Any Agent   │◄──────────────────►│    halobot       │◄──────────────────►│   Discord    │
-│ (Claude Code,│                    │   MCP Server     │   create thread    │   Server     │
-│  Cursor,     │  11 MCP tools      │                  │   post message     │              │
-│  custom)     │                    │   Discord Bot    │   wait for reply   │  👤 You      │
-└─────────────┘                     └──────────────────┘                    └─────────────┘
++--------------+  STDIO/MCP  +------------------+  Discord API  +--------------+
+|  Any Agent   |<------------>|     halobot      |<------------->|   Discord    |
+| (Claude Code,|             |   MCP Server     | create thread |   Server     |
+|  Cursor,     |  11 MCP     |                  | post message  |              |
+|  Codex,      |  tools      |   Discord Bot    | wait for reply|   You        |
+|  custom)     |             |                  |               |              |
++--------------+              +------------------+               +--------------+
 ```
 
-### Thread-Based Conversations (Recommended)
+1. Agent calls `send_and_wait` -- bot creates a Discord thread, pings you
+2. You reply in the thread (phone, desktop, wherever)
+3. Agent gets your response and keeps working
+4. Long messages auto-chunk across Discord's 2000-char limit
 
-1. Agent calls `send_thread_message` — bot creates a thread, pings you
-2. You reply in the thread
-3. Agent calls `wait_for_reply` to get your response
-4. Long messages automatically chunk across multiple Discord messages
+## MCP tools
 
-### Low-Level Access
+### High-level -- Thread conversations
 
-Agents can also directly list guilds/channels, send raw messages, read cache, fetch history, and poll for keyword matches — useful for monitoring, logging, or custom flows.
-
-## MCP Tools
-
-### High-Level (Thread Conversations)
-
-| Tool | Description |
-|------|-------------|
-| `send_thread_message` | Send a message to a whitelisted user via a thread. Creates a new thread or posts in an existing one. |
+| Tool | What it does |
+|---|---|
+| `send_thread_message` | Send a message via a Discord thread. Creates new or continues existing. |
 | `wait_for_reply` | Poll a thread for the human's reply (configurable timeout). |
-| `send_and_wait` | Send + wait in one call. Best for simple Q&A exchanges. |
+| `send_and_wait` | Send + wait in one call. Best for simple Q&A. |
 | `list_conversations` | List all active thread conversations. |
 | `get_thread_messages` | Fetch full message history from a thread. |
 
-### Low-Level (Raw Discord)
+### Low-level -- Raw Discord access
 
-| Tool | Description |
-|------|-------------|
+| Tool | What it does |
+|---|---|
 | `list_guilds` | List all servers the bot is in. |
 | `list_channels` | List text channels in a guild. |
 | `send_message` | Send a message to any channel. |
@@ -49,40 +96,21 @@ Agents can also directly list guilds/channels, send raw messages, read cache, fe
 | `get_channel_history` | Fetch paginated message history via API. |
 | `wait_for_message` | Poll until a matching message arrives (keyword filter). |
 
-## Quick Start
+## Use cases
 
-```bash
-# Install globally
-npm install -g @anthony-maio/halobot
+**Decision points** -- Agent hits an ambiguous requirement, asks which approach. You reply "option 2" from your phone.
 
-# Interactive setup — walks you through everything
-halobot setup
-```
+**Approval gates** -- Agent reaches a deploy step, waits for your explicit "go" before continuing. No more 3 AM deploys.
 
-The setup wizard will:
-1. Link you to the Discord Developer Portal to create a bot
-2. Generate the invite URL with correct permissions
-3. Collect your channel and user IDs
-4. Validate everything works (login, permissions, channel access)
-5. Optionally add halobot to Claude Code automatically
+**Progress updates** -- Agent posts status to the thread as it works. You check in when convenient.
 
-### Manual Setup
+**Multi-agent coordination** -- Multiple agents, each with their own thread, all reaching the same human. You're the hub.
 
-If you prefer to configure manually:
+**Collaborative debugging** -- Agent posts what it tried, asks for your intuition, tries again. Async pair programming.
 
-#### 1. Create a Discord Bot
+## Configuration
 
-1. Go to [Discord Developer Portal](https://discord.com/developers/applications) → New Application
-2. Navigate to **Bot** → create bot
-3. Enable **Message Content Intent** under Privileged Gateway Intents
-4. Copy the bot token
-5. Invite the bot using OAuth2 URL Generator with `bot` scope and these permissions:
-   - Send Messages, Create Public Threads, Send Messages in Threads
-   - Read Message History, Manage Threads, View Channels
-
-#### 2. Configure Your MCP Client
-
-**Claude Code (CLI):**
+### Claude Code (CLI)
 
 ```bash
 claude mcp add halobot \
@@ -92,7 +120,7 @@ claude mcp add halobot \
   -- halobot
 ```
 
-**Claude Desktop (`claude_desktop_config.json`):**
+### Claude Desktop (`claude_desktop_config.json`)
 
 ```json
 {
@@ -109,62 +137,18 @@ claude mcp add halobot \
 }
 ```
 
-**Finding IDs:** Enable Developer Mode in Discord settings → right-click channel/user → Copy ID.
+### Any MCP client
 
-### Diagnostics
+halobot speaks standard MCP over STDIO. If your client supports MCP, it supports halobot.
 
-```bash
-# Check your setup
-halobot doctor
-
-# Check setup and send a test message
-halobot doctor --test
-```
-
-## Usage Examples
-
-**Agent asks a question and waits for your answer:**
-```
-→ send_and_wait(content="I found 3 approaches for the auth refactor. Want me to list them?")
-← { "status": "replied", "thread_id": "123", "reply": "Yeah, show me all three" }
-```
-
-**Agent sends a status update in an ongoing conversation:**
-```
-→ send_thread_message(content="Finished refactoring auth. 47 tests pass.", thread_id="123")
-← { "status": "sent", "thread_id": "123" }
-```
-
-**Agent checks conversation history:**
-```
-→ get_thread_messages(thread_id="123", limit=20)
-← { "messages": [{ "author": "Agent", "content": "...", ... }, ...] }
-```
-
-**Agent monitors a channel for approvals (low-level):**
-```
-→ send_message(channel_id="456", message="Deploy to prod? Reply 'approve' to confirm.")
-← { "message_id": "789" }
-→ wait_for_message(channel_id="456", keyword="approve", after_message_id="789", timeout_seconds=120)
-← { "content": "approve", ... }
-```
+**Finding IDs:** Enable Developer Mode in Discord settings -> right-click channel/user -> Copy ID.
 
 ## Security
 
-- **Whitelist enforcement.** Thread-based tools only allow users in `DISCORD_ALLOWED_USERS`.
-- **Thread isolation.** Each agent conversation gets its own thread.
+- **Whitelist enforcement.** Thread-based tools only respond to users in `DISCORD_ALLOWED_USERS`.
+- **Thread isolation.** Each agent conversation gets its own thread. No cross-talk.
 - **No inbound commands.** The bot doesn't accept arbitrary commands from Discord.
-- **Logs to stderr.** MCP protocol uses stdout; all logging goes to stderr.
-- **Low-level tools are unrestricted** — they access any channel the bot can see. Use thread-based tools for controlled human-in-the-loop flows.
-
-## Architecture
-
-The server runs two things concurrently:
-
-1. **Discord bot** (discord.js) — connects to Discord, manages threads, caches messages
-2. **MCP server** (@modelcontextprotocol/sdk) — listens on STDIO for tool calls
-
-The Discord client logs in immediately on startup. MCP tools wait for the client to be ready before executing. Messages longer than Discord's 2000-char limit are automatically chunked at newline boundaries.
+- **Low-level tools are unrestricted** -- they access any channel the bot can see. Use thread-based tools for controlled flows.
 
 ## Development
 
@@ -179,11 +163,11 @@ npm run dev
 npx tsc --watch
 ```
 
-## Future Ideas
+## Roadmap
 
 - [ ] SSE transport for remote/multi-agent access
 - [ ] File/image attachment support via threads
-- [ ] Reaction-based quick responses (👍 = yes, 👎 = no)
+- [ ] Reaction-based quick responses
 - [ ] Persistent conversation state across server restarts
 - [ ] Rate limiting per agent
 - [ ] Webhook mode for push-based replies (no polling)
@@ -191,3 +175,13 @@ npx tsc --watch
 ## License
 
 ISC
+
+---
+
+<div align="center">
+
+**[halobot.making-minds.ai](https://halobot.making-minds.ai)**
+
+Built by [Anthony Maio](https://github.com/anthony-maio)
+
+</div>
